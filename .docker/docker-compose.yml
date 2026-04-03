@@ -1,0 +1,114 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: zscan-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-zscan}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-zscan123}
+      POSTGRES_DB: ${DB_NAME:-zscan_main}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./.docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zscan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - zscan-network
+    command: 
+      - "postgres"
+      - "-c"
+      - "search_path=public"
+
+  redis:
+    image: redis:7-alpine
+    container_name: zscan-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - zscan-network
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: zscan-api:latest
+    container_name: zscan-api
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-zscan}
+      DB_PASSWORD: ${DB_PASSWORD:-zscan123}
+      DB_NAME: ${DB_NAME:-zscan_main}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      JWT_SECRET: ${JWT_SECRET:-efya2xG9j9CN4aohPX1Qgx6+Jk6Lf0Y+lbDG9foAtlQ=}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-qhTzPaG7H6Yg2zYle6MqUgMJtsvrP+V2iPPtT6z6qqA=}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-3600}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-604800}
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - zscan-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: zscan-web:latest
+    container_name: zscan-web
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3000/api}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3001}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-adgRPPWcWuqZdx81gwuOthhEbNt4KHm06gOi73SdfVY=}
+      NODE_ENV: ${NODE_ENV:-development}
+    ports:
+      - "3001:3001"
+    depends_on:
+      - api
+    networks:
+      - zscan-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  zscan-network:
+    driver: bridge
